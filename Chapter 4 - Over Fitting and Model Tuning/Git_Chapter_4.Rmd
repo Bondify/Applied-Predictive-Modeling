@@ -1,0 +1,342 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Chapter 4: Over-Fitting and Model Tuning"
+author: "Santiago Toso"
+output: github_document
+---
+
+```{r include=FALSE}
+library(caret)
+library(tidyverse)
+library(pryr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(knitr)
+```
+
+# Data Splitting
+
+We'll use the data the authors use in this chapter.
+
+```{r}
+library(AppliedPredictiveModeling)
+data(twoClassData)
+```
+
+The predictors are stored in the data frame `predictors` and has 208 samples. 
+
+```{r}
+as.tibble(predictors)
+```
+
+The outcome classes are contained in a factor vector called `classes`.
+
+```{r}
+str(classes)
+```
+
+The base R function `sample` can create simple random splits of the data. To create stratified random splits of the data (based on the classes), the `createDataPartition` function in the `caret` package can be used. The percent of data that will be allocated to the training set should be specified.
+
+First, we set the random seed so we can reproduce the results.
+
+```{r}
+set.seed(1)
+```
+
+By default, the numbers are returned as a list. Using **list = FALSE**, a matrix of row numbers is generated. These samples are allocated to the training set.
+
+```{r}
+trainingRows <- createDataPartition(classes,
+                                    p = .8,
+                                    list = FALSE)
+head(trainingRows)
+```
+
+Now we can create the training set.
+
+```{r}
+trainPredictors <- predictors[trainingRows, ]
+trainClasses <- classes[trainingRows]
+
+as_tibble(trainPredictors)
+```
+
+And the test set.
+
+```{r}
+testPredictors <- predictors[-trainingRows, ]
+testClasses <- classes[-trainingRows]
+
+as_tibble(testPredictors)
+```
+
+To generate a test set using maximum dissimilarity sampling, the `caret` function `maxDissim` can be used to sequentially sample the data.
+
+# Resampling
+
+The `caret` package has various functions for data splitting. For example, to use repeated training/test splits, the function `createDataPartition` could be used again with an additional argument named `times` to generate multiple splits. For illustration, we'll generate the information needed for three resampled versions of the training set.
+
+```{r}
+set.seed(1)
+repeatedSplits <- createDataPartition(trainClasses, 
+                                      p = 0.8,
+                                      times = 3)
+
+as.tibble(repeatedSplits)
+```
+
+Similarly, the `caret` package has functions `createResamples` (for bootstrapping), `createFolds` (for **k**-fold cross-validation) and `createMultiSamples` (for Monte Carlos cross-validation). To create indicators for 10-fold cross-validation:
+
+```{r}
+set.seed(1)
+cvSplits <- createFolds(trainClasses, k=10, returnTrain = TRUE)
+
+str(cvSplits)
+```
+
+Each fold is a list of rows from the `trainClasses` vector.
+
+Get the first fold (training set). Notice that `cvSplits` is a list of data frames:
+
+```{r}
+fold1 <- cvSplits[[1]]
+```
+
+To get the first 90% of the data (first fold):
+```{r}
+cvPredictors1 <- trainPredictors[fold1, ]
+cvClasses1 <- trainClasses[fold1]
+paste('The original training sample has ', nrow(trainPredictors), ' rows', sep = '')
+paste('The first fold training sample has ', nrow(cvPredictors1), ' rows', sep = '')
+```
+
+In practice, functions discussed in the next section can be used to automatically create a resampled data sets, fit models and evaluate performance.
+
+
+# Basic Model Building in R
+
+Now that we have training and test sets, we could fit a 5-nearest neighbor classification model to the trianing data and use it to predict the test set. There are miltiple R functions for building this model: the `knn` function in the `MASS` package, the `ipredknn` function in the `ipred` package, and the `knn3` function in `caret`. The `knn3` function can produce class predictions as well as the proportion of neighbors for each class.
+
+There are two main conventions for specifying models in R: the formula interface and the non-formula (or "matrix") interface. For the former, the predictors are explicitly listed. A basic R formula has two sides: the left-hand side denotes the outcome and the right-hand side describes how the predictors are used. These are separated with a tilde (~). For example, the fomrula `modelFuction(price ~ numBedrooms + numBaths + acres, data = housingData)` would predict the closing price of a house using three quantitative charasteristics. The formla `y ~ .` can be used to indicate that all the coulumns in the data set (except y) should be used as a predictor. The formula interface has many conveniences. For example, trnasformations such as `log(acres)` can be specified in line. Unfortunately, R does not efficiently store the information about the formula. Using this interdace with data sets that contain a large number of predictors may unnecessarily slow the computations.
+
+The non-formula interface specifies the preductors for the model using a matrix or data frame (all the predictors in the object are used in the model). The outcome data are usually passed into the model as a vector object. For example `modelFunction(x = housePredictors, y = price)`.
+
+Note that not all R functions have both interfaces.
+
+For `knn3`, we can estimate the 5-nearest neighbor model with
+
+```{r}
+trainPredictors <- as.matrix(trainPredictors)
+knnFit <- knn3(x = trainPredictors, y = trainClasses, k = 5)
+knnFit
+```
+
+At this point, the `knn3` object is ready to predict new samples. To assign new samples to classes, the `predict` method is used with the model object. The standard convention is:
+```{r}
+testPredictions <- predict(knnFit, newdata =  testPredictors, type = 'class')
+head(testPredictions)
+```
+
+Let's see how the model did
+
+```{r}
+results <-as.vector(testPredictions == testClasses) 
+performance <- length(subset(results, results == TRUE))/length(results)*100
+paste('The model made the right prediction for ', round(performance, 1), '% of the test classes', sep = '')
+```
+
+# Determination of the Tuning Parameters
+
+Section 4.6 illustrated parameter tuning for a SVM using credit scoring data. Using resampling, a value of the cost parameter was estimated. As discussed in later chapters, the SVM model is characterized by what type of kernel function the model uses. For example, the linear kernel function specifies a linear relationship between the predictors and the function outcome. For the example, a radial basis function (RBF) kernel function was used. The kernel function has an additional tuning parameter associated with it denoted as `σ`, which impacts the smoothness of the decision boundary. Normally, several combinations of both tuning parameters would be evaluated using resampling. However, Caputo et al. (2002) describe an analytical formula that can be used to get reasonable estimates of σ. The `caret` function `train` uses this approach to estimate the kernel parameter, leaving only the cost parameter for tuning.
+
+To tune an SVM model using the credit scroing training set samples, the `train` function can be used. Both the training set predictors and outcome are contained in an R data frame called `GermanCreditTrain`.
+
+```{r}
+library(caret)
+data("GermanCredit")
+as_tibble(GermanCredit)
+```
+
+The `chapters` directory of the `AppliedPredictiveModeling` package contains the code for creating the training and test sets. These data sets are contained in the data frames `GermanCreditTrain` and `GermanCreditTest`, respectively.
+
+```{r}
+trainRows <- createDataPartition(GermanCredit$Class, 
+                                 p = .8,
+                                 list = FALSE)
+GermanCreditTrain <- GermanCredit[trainRows, ]
+GermanCreditTest <- GermanCredit[-trainRows, ]
+```
+
+
+We will use all the predictors to model the outcome. To do this we use the formula interface with the formula `Class ~ .` the classes are stored in the data frame column called `class`. The most basic function would be 
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1056)
+svmFit1 <- train(Class ~ .,
+                data = GermanCreditTrain,
+                # The method argument indicates the model type.
+                # See ?train for a list of available models.
+                method = 'svmRadial')
+svmFit1
+```
+
+However we would like to tailor the computations by overriding several of the default values. First, we would like to pre-process the predictor data by centering and scaling their values. To do this, the `preProc` argument can be used:
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1056)
+svmFit2 <- train(Class ~ .,
+                 data = GermanCreditTrain,
+                 method = 'svmRadial',
+                 preProcess = c('center', "scale"))
+svmFit2
+```
+
+Also, for this function, the user can specify the exact cost values to investigate. In addition, the function has algorithms to determine reasonable values for many models. Using the option `tuneLength = 10`, the cost values 2^-2, 2^-1,..., 2^7 are evaluated.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1056)
+svmFit3 <- train(Class ~ .,
+                 data = GermanCreditTrain,
+                 method = 'svmRadial',
+                 preProcess = c("center", "scale"),
+                 tuneLength = 10)
+svmFit3
+```
+
+By default, the it uses the bootstrap method for resampling and calculate performance measures. Repeated  10-fold cross-validation can be specified with the `trainControl` function. The final sintax is then
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1056)
+svmFit <- train(Class ~ .,
+                data = GermanCreditTrain,
+                method = 'svmRadial',
+                preProcess = c("center", "scale"),
+                tuneLength = 10,
+                trControl = trainControl(method = 'repeatedcv',
+                                         repeats = 5,
+                                         classProbs = TRUE))
+svmFit
+```
+
+A line plot of average performance depending on the cost.
+
+```{r message=FALSE, warning=FALSE}
+#plot(svmFit, scales = list(x = list(log = 2)))
+library(scales)
+ggplot(svmFit, aes(x = svmFit$xlevels, y = svmFit$yLimits)) +
+  geom_point(color = '#41b6c4') +
+  geom_line(color = '#41b6c4') +
+  scale_x_continuous(trans = log2_trans(),
+    breaks = trans_breaks("log2", function(x) 2^x),
+    labels = trans_format("log2", math_format(2^.x))) +
+  scale_y_continuous(labels = percent) +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey")
+        )
+```
+
+To predict new samples with this model, we use the `predict` function
+
+```{r message=FALSE, warning=FALSE}
+predictedClasses <- predict(svmFit, GermanCreditTest)
+str(predictedClasses)
+summary(predictedClasses)
+```
+
+We can use the `type` option to get class probabilities
+
+```{r message=FALSE, warning=FALSE}
+predictedProb <- predict(svmFit, GermanCreditTest, type = 'prob')
+head(predictedProb)
+```
+
+# Between-Model Comparisons
+
+In section 4.6, the SVM model was contrasted with a logistic regression model. While basic logistic regression has no tuning parameters, resampling can still be used to charaterize the performance of the model. The `train` function is once again used with a different `method` argument of `glm` (for generalized linear models). The same resampling specification is used and, since the random number seed is set prior to modeling, the resamples are exactly the same as those in the SVM model.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(1056)
+logisticReg <- train(Class ~ . ,
+                     GermanCreditTrain,
+                     method = 'glm',
+                     #preProcess = c("center", "scale") this preprocess doesn't affect the results, so we can skip it
+                     trControl = trainControl(method = 'repeatedcv',
+                                              repeats = 5,
+                                              classProbs = TRUE)
+                     #doesn't have "tuneLength" since linear models don't have tuning parameters
+)
+logisticReg
+```
+
+To compare these two models based on their cross-validation statistics, the `resamples` function can be used with models that share a common set of resampled data sets. Since the random number seed was initialized prior to both models, paired accuracy measurements exist for each data set. First, we create a `resamples` object from the models:
+
+```{r}
+resamp <- resamples(list(SVM = svmFit, Logistic = logisticReg))
+summary(resamp)
+```
+
+The summary indicates that the performance distributions are very similar. The NA column corresponds to cases where the resampled models failed (usually due to numerical issues). The `resamples` class has several methods for visualizing the paired values (see ?xyplot.resamples for a list of plot types). 
+
+```{r message=FALSE, warning=FALSE}
+dotplot(resamp,
+        scales =list(x = list(relation = "free")),
+        between = list(x = 2))
+
+# bwplot(resamp,
+#        metric = "RMSE")
+
+densityplot(resamp,
+            auto.key = list(columns = 3),
+            pch = "|")
+
+# xyplot(resamp,
+#        models = c("CART", "MARS"),
+#        metric = "RMSE")
+
+# splom(resamp, metric = "RMSE")
+# splom(resamp, variables = "metrics")
+
+# parallelplot(resamp, metric = "RMSE")
+
+
+#?xyplot.resamples
+```
+
+To asses possible differences between methods the `diff` method is used.
+
+```{r message=FALSE, warning=FALSE}
+modelDifferences <- diff(resamp)
+summary(modelDifferences)
+```
+
+The p-values for the model comparisons are large (0.96 for accuracy and 0.89 > 0.05 for kappa), which indicates that the models fail to show any significative difference in performance.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

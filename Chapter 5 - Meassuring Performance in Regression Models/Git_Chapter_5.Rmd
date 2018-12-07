@@ -1,0 +1,55 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Chapter 5: Measuring Performance in Regression Models"
+author: "Santiago Toso"
+output: github_document
+---
+
+The following sections will reference functions from the `caret` package.
+
+To compute model performance, the observed and predicted outcomes should be stored in vectors. For regression, the vectors should be numeric. Here two vectors are manually created to illustrate the techniques:
+
+```{r}
+observed <- c(.22, .83, -.12, .89, -.23, -1.3, -.15, -1.4, .62, .99, -.18, .32, .34, -.30, .04, -.87, .55, -1.3, -1.15, .2)
+
+predicted <- c(.24, .78, -.66, .53, .7, -.75, -.41, -.43, .49, .79, -1.19, .06, .75, -.07, .43, -.42, -.25, -.64, -1.26, -.07)
+
+residualValues <- observed - predicted
+summary(residualValues)
+```
+
+An important step in evaluating the quality of the model is to visualize the results. First, a plot of the observed values against the predicted values helps one to understand how well the model fits. Also, a plot of the residuals versus the predicted values can help uncover systematic patterns in the model predictions.
+
+```{r}
+axisRange <- extendrange(c(observed, predicted))
+plot(observed, predicted,
+     ylim = axisRange,
+     xlim = axisRange)
+
+#Add 45 degrees reference line
+abline(0, 1, col = "darkgrey", lty = 2)
+
+#Predicted values versus residuals
+plot(predicted, residualValues, ylab = "residual")
+abline(0, 1, col = "darkgrey", lty = 2)
+```
+
+The `caret` package contains functions for calculating the RMSE and R^2 value:
+
+```{r}
+library(caret)
+R2(predicted, observed)
+RMSE(predicted, observed)
+```
+
+There are different formulas for R^2. By default, `R2` uses the square of the correlation coefficient. Base `R` contains a function to compute the correlation, including Spearman's rank correlation.
+
+```{r}
+# Simple correlation
+cor(predicted, observed)
+cor(predicted, observed)^2
+
+# Rank correlation
+cor(predicted, observed, method = 'spearman')
+```
+

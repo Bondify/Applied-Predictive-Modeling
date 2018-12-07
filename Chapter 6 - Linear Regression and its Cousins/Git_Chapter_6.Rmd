@@ -1,0 +1,398 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Chapter 6 - Linear Regression and its cousins"
+author: "Santiago Toso"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(knitr)
+library(caret)
+```
+
+We'll use the solubility data treated on this chapter. The predictors for the training and test sets are contained in data frames called `solTrainX` and `solTestX`, respectively. To obtain the data in R,
+
+```{r}
+library(AppliedPredictiveModeling)
+data(solubility)
+ls(pattern = "^solT")
+```
+
+Each column of the data corresponds to a predictor and rows correspond to compounds. There are 228 columns in the data. A random sample of column names is
+
+```{r}
+set.seed(2)
+sample(names(solTrainX), 8)
+```
+
+The `FP` columns correspond to binary 0/1 fingerprint predictors that are associated with the presence or absence of a particular chemical structure. Alternate versions of these data that have been Box-Cox transformed are contained in the data frames `solTrainXtrans` and `solTestXtrans`. The solubility values for each compound are contained in numeric vectors named `solTrainY` and `solTestY`.
+
+# Ordinary Linear Regression
+
+The primary function for creating linear regression models using simple least squares is `lm`. This function takes a formula and data frame as input. Because of this, the training set predictors and outcome should be contained in the same data frame. We can create a new data frame for this purpose:
+
+```{r}
+trainingData <- solTrainXtrans
+trainingData <- trainingData %>% 
+  mutate(solubility = solTrainY)
+```
+
+To fit a linear model with all the predictor entering in the model as simple, independent linear terms, the formula shortcut `solubility ~ .` can be used:
+
+```{r}
+lmFitAllPredictors <- lm(solubility ~ ., data = trainingData)
+summary(lmFitAllPredictors)
+```
+
+An interecept is automatically added to the model. The `summary` method displays model summary statistics, the parameter estimates, their standard errors, and *p*-values for testing whether each individual coefficient is different than 0. 
+
+The simple estimates for R^2 and RMSE were 0.94 and 0.55 respectively. Note that these values are likely optimistic as they have been derived by re-predicting the training data set.
+
+To compute the model solubility values for new samples, the `predict` method is used:
+
+```{r}
+lmPred1 <- predict(lmFitAllPredictors, solTestXtrans)
+kable(t(head(lmPred1)))
+```
+
+We can collect the observed and predicted values into a data frame, then use the `caret` function `defaultSummary` to estimate the test set performance:
+
+```{r}
+lmValues <- data.frame(obs = solTestY, pred = lmPred1)
+defaultSummary(lmValues)
+```
+
+Based on the test set, the summaries produced by the summary function for `lm` were optimistic. We can see this on a scatter plot too.
+
+```{r}
+ggplot(lmValues, aes(x= pred, y= obs)) + 
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'Observed vs Predicted values') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+If we wanted a robust linear model, the the robust linear model function (`rlm`) from `MASS` package could be used, which by default employs the Huber approach. Similar to the `lm` function, `rlm` is called as follows:
+
+```{r}
+library(MASS)
+rlmFitAllPredictors <- rlm(solubility ~ ., data = trainingData)
+```
+
+The `train` function generates a resampling estimate of performance. Because the training set size is not small, 10-fold cross-validation should produce reasonalbe estimates of model performance. The function `trainControl` specifies the type of resampling:
+
+```{r}
+ctrl <- trainControl(method = 'cv', number = 10)
+```
+
+Now we can set the `train` function:
+
+```{r warning=FALSE}
+set.seed(100)
+lmFit1 <- train(x = solTrainXtrans, y = solTrainY,
+                method = 'lm',
+                trControl = ctrl)
+lmFit1
+```
+
+For models built to explain, it is important to check model assumptions, such as the residual distribution. For predictive models, some of the same diagnostic techniques can shed light on areas where the model is not predicting well. For example, we could plot the residuals versus the predicted values for the model. If the plot shows a random cloud of points, we will feel more comfortable that there are no major terms missing from the model (such as a quadratic term, etc.) or significant outliers. Another important plot is the predicted values versus the observed values to asses how close the predictions are to the actual values. Two methods of doing this (using the training set samples) are
+
+```{r}
+lmFit1Values <- data_frame(pred = predict(lmFit1), obs = solTrainY)
+rsquared <- round(mean(lmFit1$results$Rsquared),2)
+ggplot(data = lmFit1Values, aes(x = pred, y = obs))+
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'Observed vs Predicted values') +
+  annotate('text', x = -10, y = 0, label = paste("R²= ", rsquared, sep = '')) +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+
+ggplot(data = lmFit1Values, aes(x = pred, y = resid(lmFit1))) +
+  geom_point(color = '#41b6c4') +
+  labs(title = 'Residuals vs Predicted values') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+
+```
+
+Note that the `resid` function generates the model residuals for the training set and that using the `predict function without a additional data argument returns the predicted values for the training set. For this model, there are no obvious warning signs in the diagnostic plots.
+
+To build a smaller model without predictors with extremely high correlations, we can use the feature selection methods we saw in previous chapters to reduce the number of predictors such that there are no absolute correlations above 0.9:
+
+```{r}
+corThresh <- 0.9
+tooHigh <- findCorrelation(cor(solTrainXtrans), corThresh)
+corrPred <- names(solTrainXtrans)[tooHigh]
+trainXfiltered <- solTrainXtrans[ , -tooHigh]
+testXfiltered <- solTestXtrans[ , -tooHigh]
+
+set.seed(100)
+lmFiltered <- train(x = trainXfiltered, y = solTrainY,
+                    method = 'lm',
+                    trControl = ctrl)
+lmFiltered
+```
+
+Robust linear regression can also be performed using the `train` function which employs the `rlm` function. However, it is important to note that `rlm` does not allow the covariance matrix of the predictors to be singular (unlike the `lm` function). To ensure that predictors are not singular, we will pre-process the predictors using PCA. Using the filtered set of predictors, the robust regression model performance is
+
+```{r}
+set.seed(100)
+rlmPCA <- train(x = solTrainXtrans, y = solTrainY,
+                method = 'rlm',
+                preProcess = 'pca',
+                trControl = ctrl)
+
+rlmPCA
+```
+
+# Partial Least Squares
+
+The `pls` package has functions for PLS and PCR. SIMPLS, the first Dayal and MacGregor algorithm, and the algorithm developed by Rännar are each available. By default, the `pls` package uses the first Dayal and MacGregor kernel algorithm while the other algorithms can be specified using the `method` argument using values `oscorespls`, `simpls`, or `widekernelpls`. The `plsr` function, like the `lm` function, requires a model formula:
+
+```{r}
+library("pls")
+plsFit <- plsr(solubility ~ ., data = trainingData)
+```
+
+The number of components can be fixed using the `ncomp` argument or, if left to default, the maximum number of componenets will be calculated. Predictions on new samples can be calculated using the `predict` function. Predictions can be made for a specific number of components or for several values at a time. For example,
+
+```{r}
+predict(plsFit, solTestXtrans[1:5, ], ncomp = 1:2)
+```
+
+The `plsr` function has options for either K-fold or leave-one-out cross-validation (via the `validation` argument) or the PLS algorithm to use, such as SIMPLS (using the `method` argument).
+There are several helper functions to extract the PLS components (in the function `loadings`), the PLS scores (`scores`), and other quantities. The `plot` function has visualizations for many aspects of the model.
+`train` can also be used with `method` values of `pls`, such as `oscorespls`, `simpls`, or `widekernelpls`. For example,
+
+```{r}
+set.seed(100)
+plsTune <- train(solTrainXtrans, solTrainY,
+                 method = 'pls',
+                 # The default tuning grid evaluates
+                 # components 1... tuneLength
+                 tuneLength = 20,
+                 trControl = ctrl,
+                 preProcess = c("center", "scale"))
+plsTune
+```
+
+This code reproduces the PLS model shown in Fig. 6.11.
+
+```{r}
+ggplot(plsTune$results, aes(x = ncomp, y = RMSE)) +
+  geom_line(color = '#41b6c4') +
+  geom_point(color = '#41b6c4') +
+  labs(title = '# Components vs RMSE for PLS model', x = '# Components') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+# Penalized Regression Models
+
+Ridge-regression models can be created using `lm.ridge` function in the `MASS` package or the `enet` function in the `elasticnet` package. When calling the `enet` function, the `lambda` argument specifies the ridge-regression penalty.
+
+```{r}
+#install.packages("elasticnet")
+library(elasticnet)
+ridgeModel <- enet(x = as.matrix(solTrainXtrans), y = solTrainY,
+                   lambda = 0.001)
+```
+
+Recall that the elastic net model has both ridge penalties and lasso penalties and, at this point, the R object `ridgeModel1` has only fixed the ridge penalty value. The lasso penalty can be computed efficiently for many values of the penalty. The `predict` function for `enet` objects generates predictions for one or more values of the lasso penalty simultaneaously using `s` and `mode` arguments. For ridge regression, we only desire a single lasso penalty of 0, so we want the full solution. To produce a ridge-regression solution we define  `s=1` with `mode = fraction`. These last options specify the fraction of the full solution we want the ridge regression to be. `s=1` means we want the full solution to be ridge (no lasso); while `s=0` would mean we want the full solution to be lasso (no ridge):
+
+```{r}
+ridgeModel <- predict(ridgeModel, newx = as.matrix(solTestXtrans),
+                   s = 1, mode = 'fraction',
+                   type = 'fit')
+head(ridgeModel$fit)
+```
+
+We have created a ridge regression and aplied it to the test set. No lasso was created since we specified a `s=1` in the `predict` function. If we want to use the lasso, we need to make `s` different than one to try different lasso penalties.
+
+To tune over the penalty of the ridge regression in the elastic net model we can use `train` with a different method:
+
+```{r}
+ridgeGrid <- data.frame(.lambda = seq(0, .1, length = 15))
+set.seed(100)
+ridgeRegFit <- train(solTrainXtrans, solTrainY,
+                     method = "ridge",
+                     # For the model over many penalty values
+                     tuneGrid = ridgeGrid,
+                     trControl = ctrl,
+                     # Put the predictors on the same circle
+                     preProcess = c("center", "scale"))
+ridgeRegFit
+```
+
+The lasso model can be estimated using a number of different functions. The `lars` package contains the `lars` function, the `elasticnet` package has `enet`, and the `glmnet` package has a function of the same name. The syntax for these fuctions is very similar. For the `enet` function, the usage would be 
+
+```{r}
+enetModel <- enet(x = as.matrix(solTrainXtrans), y= solTrainY,
+                  lambda = 0.01, normalize = TRUE)
+```
+
+The predictor data must be a matrix object, so the data frame `solTrainXtrans` needs to be converted for the `enet` function. The predictors should be centered and scaled prior to modeling. The `normalize` argument will do this standarization automatically. The parameter `lambda` controls the ridge-regression penalty and, setting this value to 0, fits the lasso model. The lasso penalty does not need to be specified until the time of prediction:
+
+```{r}
+enetPred <- predict(enetModel, newx = as.matrix(solTestXtrans),
+                    s = .1, mode = 'fraction',
+                    type = 'fit')
+# A list is returned with several items
+names(enetPred)
+```
+
+```{r}
+plot.enet(enetModel)
+```
+
+The `fit` component has the predicted values:
+
+```{r}
+head(enetPred$fit)
+```
+
+To determine which predictors are used in the model the `predict` method is used with `type = "coefficients"`:
+
+```{r}
+enetCoef <- predict(enetModel, newx = as.matrix(solTestXtrans),
+                    s = .1, mode = "fraction",
+                    type = "coefficients")
+tail(enetCoef$coefficients)
+```
+
+More than one value of `s` can bu used with the `predict` function to generate predictions for more than one model simultaneously.
+Other packages you can use to fit the lasso model or its variantes are `biglars`(for large data sets), `FLLat` (for the fused lasso), `gprlasso` (group lasso), `penalized`, `relaxo` (the relaxed lasso), and others. To tune the elastic net model using `train` we specify `method = "enet"`. Here, we tune the model over a custom set of penalties.
+
+```{r}
+enetGrid <- expand.grid(.lambda = c(0, 0.01, 0.1),
+                        .fraction = seq(.05, 1, length = 20))
+set.seed(100)
+enetTune <- train(solTrainXtrans, solTrainY,
+                  method = 'enet',
+                  tuneGrid = enetGrid,
+                  trControl = ctrl,
+                  preProcess = c("center", "scale"))
+plot(enetTune)
+```
+
+```{r}
+#enetTune$results
+ggplot(enetTune$results, aes(x = fraction, y = RMSE, group = lambda)) +
+  geom_line(aes(color = as.character(lambda))) +
+  geom_point(aes(color = as.character(lambda))) +
+  labs(title = 'Elastic net for different values of λ1', x = 'Fraction of full solution') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey"),
+      legend.position = c(0.75, 0.8),
+      legend.title = element_blank()
+      )
+```
+
+λ1 = 0 is the lasso.
+
+```{r}
+beta <- enetTune$finalModel$beta.pure
+tmp <- as.data.frame(as.matrix(beta))
+tmp$coef <- row.names(tmp)
+tmp <- reshape::melt(tmp, id = "coef")
+tmp$norm <- enetTune$finalModel$L1norm # compute L1 norm
+
+
+# x11(width = 13/2.54, height = 9/2.54)
+g1 <- ggplot(tmp, aes(norm, value, color = variable)) + 
+  geom_line() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.position = "none")
+
+g1
+
+# If you're using an html_document as output myght be better to make it interactive:
+# library(plotly)
+# ggplotly(g1)
+```
+
+We could clean it, or zoom in a bit till L1 norm = 100 to take a better look at the first variables that participate in the model.
+
+```{r warning=FALSE}
+tmp1 <- tmp %>% 
+  filter(norm < 100)
+
+tmp2 <- tmp1 %>% 
+  group_by(variable) %>% 
+  summarize(sum = sum(value)) %>% 
+  filter(sum != 0)
+
+tmp1 <- tmp1 %>% 
+  filter(variable %in% tmp2$variable)
+
+g <- ggplot(tmp1, aes(norm, value, color = variable)) + 
+  geom_line() +
+  labs(title = "Lasso", x = "L1 norm", y = "Standarized coefficients") +
+  #scale_color_brewer(palette="Set3") +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.direction = "horizontal",
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+g
+# If you're using an html_document as output myght be better to make it interactive:
+# library(plotly)
+# ggplotly(g)
+```
+
+I saw that I've been using the lasso plot a lot and it takes a lot of code to get the plot I wanted. To solve that problem I created my own function. It takes the object that you get as a result from the `train` function of the `caret` package when you use `method = enet`. 
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/enetPlot.R")
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/enetPlotCompare.R")
+enetPlot(enetModel = enetTune, L1norm = 100, maxlegend = 40)
+enetPlotCompare(enetModel = enetTune)
+```
+
+
+
+
+
+
+
+
+
+

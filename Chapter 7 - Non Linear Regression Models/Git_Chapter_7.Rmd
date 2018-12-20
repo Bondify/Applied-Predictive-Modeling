@@ -1,0 +1,407 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Chapter 7 - Non Linear Regression Models"
+author: "Santiago Toso"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(AppliedPredictiveModeling)
+```
+
+This section will reference functions from the `caret`, `earth`, `kernlab` and `nnet` packages.
+
+`R` has a number of packages and functions for creating neural networks. Relevant packages include `nnet`, `neural` and `RSNNS`. The `nnet` package is the focus here since it supports the basic neural network models outlined in this chapter (single layer of hidden units) and weight decay and has simple sintax. `RSNNS` supports a wide array of neural networks. Bergmeir and Benites (2012) outline the various network packages in `R` and contain a tutorial on `RSNNS`.
+
+Like the previous chapter, we'll use the solubility data treated on this chapter. The predictors for the training and test sets are contained in data frames called `solTrainX` and `solTestX`, respectively. To obtain the data in R,
+
+```{r}
+data(solubility)
+ls(pattern = "^solT")
+```
+
+The `FP` columns correspond to binary 0/1 fingerprint predictors that are associated with the presence or absence of a particular chemical structure. Alternate versions of these data that have been Box-Cox transformed are contained in the data frames `solTrainXtrans` and `solTestXtrans`. The solubility values for each compound are contained in numeric vectors named `solTrainY` and `solTestY`.
+
+# Neural Networks
+
+To fit a regression model, the `nnet` package takes both the formula and non-formula interfaces. For regression, the linear relationship between the hidden units and the prediction can be used with the option `linout = TRUE`. A basic neural network function call would be:
+
+```{r}
+library(nnet)
+nnetFit <- nnet(solTrainXtrans, solTrainY,
+                size = 5,
+                decay = 0.01,
+                linout = TRUE,
+                # Reduce the amount of printed output
+                trace = FALSE,
+                # Expand the number of iterations to find
+                # parameter estimates...
+                maxit = 500,
+                # add the number of parameters used by the model
+                MaxNWts = 5 * (ncol(solTrainXtrans) + 1) + 5 + 1)
+nnetFit
+```
+
+This would create a single model with 5 hidden units. Note, this assumes that the data in `solTrainXtrans` have been standarized to be on the same scale.
+
+To use the model averaging, the `avNNet` function in the `caret` package has a nearly identical syntax.
+
+```{r}
+nnetAvg <- avNNet(solTrainXtrans, solTrainY,
+                size = 5,
+                decay = 0.01,
+                # Specify how many models to average
+                repeats = 5,
+                linout = TRUE,
+                # Reduce the amount of printed output
+                trace = FALSE,
+                # Expand the number of iterations to find
+                # parameter estimates...
+                maxit = 500,
+                # add the number of parameters used by the model
+                MaxNWts = 5 * (ncol(solTrainXtrans) + 1) + 5 + 1)
+nnetAvg
+```
+
+Now we can use them with the testing set.
+
+```{r}
+nnetPred <- predict(nnetFit, solTestXtrans)
+avgPred <- predict(nnetAvg, solTestXtrans)
+nnetValues <- data.frame(pred = nnetPred, obs = solTestY)
+avgValues <- data.frame(pred = avgPred, obs = solTestY)
+nnetSummary <- defaultSummary(nnetValues)
+avgSummary <- defaultSummary(avgValues)
+nnetSummary
+avgSummary
+```
+Graphically
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/predObsPlot.R")
+gnnet <- plot.pred(nnetPred, solTestY, title = 'Neural Network')
+gavnnet <- plot.pred(avgPred, solTestY, title = 'Average Neural Network')
+
+gnnet
+gavnnet
+```
+
+To mimic the earlier approach of choosing the number of hidden units and the amount of weight decay via resampling, the `train` function can be applied using either `method = "nnet"` or `method = "avNNet"`. First, we remove predictors to ensure that the maximum absolute pairwise correlation between the predictors is less than 0.75.
+
+```{r warning=FALSE}
+# the findCorrelation tajes a correlation matrix and determines the 
+# column numbers that should be rmeoved to keep all pair-wise
+# correlations below a threshold
+tooHigh <- findCorrelation(cor(solTrainXtrans), cutoff = 0.75)
+trainXnnet <- solTrainXtrans[ , -tooHigh]
+testXnnet <- solTestXtrans[ , -tooHigh]
+
+# Cross-Validation
+ctrl <- trainControl(method = 'cv', number = 10)
+
+# Create a specific candidate set of models to evaluate:
+nnetGrid <- expand.grid(.decay = c(0, .01, .1),
+                        .size = c(1:10),
+                        # The next option is to use bagging (see the
+                        # next chapter) instead of different random
+                        # seeds.
+                        .bag = FALSE)
+
+set.seed(100)
+nnetTune <- train(solTrainXtrans, solTrainY,
+                  method = "avNNet",
+                  tuneGrid = nnetGrid,
+                  trControl = ctrl,
+                  # Automatically standarize data prior to modeling
+                  # and prediction
+                  preProcess = c("center", "scale", "pca"),
+                  linout = TRUE,
+                  trace = FALSE,
+                  MaxNWts = 10 * (ncol(trainXnnet) + 1) + 10 + 1,
+                  maxit = 500)
+
+nnetTune
+```
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/plotModel.R")
+plot.model(nnetTune)
+```
+
+```{r}
+
+# Create a specific candidate set of models to evaluate:
+nnetGrid1 <- expand.grid(.decay = c(0, .01, .1),
+                        .size = c(1:10))
+
+set.seed(100)
+nnetTune1 <- train(solTrainXtrans, solTrainY,
+                  method = "nnet",
+                  tuneGrid = nnetGrid1,
+                  trControl = ctrl,
+                  # Automatically standarize data prior to modeling
+                  # and prediction
+                  preProcess = c("center", "scale", "pca"),
+                  linout = TRUE,
+                  trace = FALSE,
+                  MaxNWts = 10 * (ncol(trainXnnet) + 1) + 10 + 1,
+                  maxit = 500)
+
+nnetTune1
+```
+
+# Multivariate Adaptive Regression Splines
+
+MARS models are in several packages, but the most extensive implementation is in the `earth` package. The MARS model using the nominal forward pass and pruning step can be called simply
+
+```{r}
+library(earth)
+marsFit <- earth(solTrainXtrans, solTrainY)
+marsFit
+```
+
+Note that since this model used the internal GCV technique for model selection, the details of this model are different than the one used previously in the cahpter. The `summary` emthod generates more extensive output:
+
+```{r}
+summary(marsFit)
+```
+
+In this output, *h(.)* is the hingre function. In the output above, the term `h(MolWeight-5.77157)` is zero when the molecular weight is less than 5.77157. The reflected hinge function would be shown as `h(5.77157-MolWeight)`.
+
+The `plotmo` function in the `earth` package can be used to produce plots. 
+
+```{r}
+plotmo(marsFit)
+```
+
+
+To tune the model using external resampling, the `train` function can be used. The following code reproduces the results in Fig. 7.4:
+
+```{r}
+# Define the candidate models to test
+# We define the degrees of the equation and the
+# number of terms to use
+marsGrid <- expand.grid(.degree = 1:2,
+                        .nprune = 2:38)
+
+# Fix the seed so that the results can be reproduced
+set.seed(100)
+marsTuned <- train(solTrainXtrans, solTrainY,
+                   method = 'earth',
+                   tuneGrid = marsGrid,
+                   trControl = trainControl(method = "cv"))
+marsTuned
+```
+
+We can test the model with the test set.
+
+```{r}
+marsPred <- predict(marsTuned, solTestXtrans)
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/predObsPlot.R")
+gmars <- plot.pred(marsPred, solTestY, title = 'MARS')
+gmars
+```
+
+There are two functions that estimate the importance of each predictor in the MARS model: `evimp` in the `earth` package and `varImp` in the `caret` package (although the latter calls the former): 
+
+```{r}
+varImp(marsTuned)
+```
+
+These results are scaled to be between 0 and 100 and are different than those shown in table 7.1 (since the model in Table 7.1 did not undergo the full model growing and pruning process). Note that after the first few variables, the remainder have much smaller importance to the model.
+
+# Support Vector Machines
+
+There are a number of packages with implementations of support vector machines models. The `svm` function in the `e1071` package has an interface to the `LIBSVM` library (Chang and Lin 2011) for regression. A more comprehensive implementation of SVM models for regression is the `kernlab` package. In that package, the `ksvm` function is available for the regression models and a large number of kernel functions. The radial basis function is the default kernel function. If appropiate values of the cost and kernel parameters are known, this model can be fit as
+
+```{r}
+#library(kernlab)
+# svmFit <- ksvm(x = solTrainXtrans, y = solTrainY,
+#                kernel = "rbfdot", kpar = "automatic",
+#                C = 1, epsilon = .1)
+```
+
+The function automatically uses the nalytical approach to estimate σ. Since `y` is a numeric vector, the function knows to fit a regression model (instead of a classification model). Other kernel functions can be used, including the polynomial (using `kernel = "polydot"`) and linear (`kernel = "vanilladot"`). 
+
+If the values are unknown, they can be estimated through resampling. In `train`, the `method` values of `svmRadial`, `svmLinear`, or `svmPoly` fit different kernels:
+
+```{r}
+svmRTuned <- train(solTrainXtrans, solTrainY,
+                   method = "svmRadial",
+                   preProcess = c("center", "scale"),
+                   tuneLength = 14,
+                   trControl = trainControl(method = "cv"))
+```
+
+The `tuneLength` argument will use the default grid search of 14 cost values between 2^-2 - 2^11. Again, σ is estimated analytically by default.
+
+```{r}
+svmRTuned
+```
+
+Graphically,
+
+```{r}
+library(scales)
+ggplot(svmRTuned, aes(x = svmRTuned$results$C, y = svmRTuned$results$RMSE)) +
+  geom_point(color = '#41b6c4') +
+  geom_line(color = '#41b6c4') +
+  scale_x_continuous(trans = log2_trans(),
+    breaks = trans_breaks("log2", function(x) 2^x),
+    labels = trans_format("log2", math_format(2^.x))) +
+  scale_y_continuous(labels = percent) +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey")
+        )
+```
+
+We could now see how it goes with the test set.
+
+```{r}
+svmRPred <- predict(svmRTuned, solTestXtrans)
+gsvm <- plot.pred(svmRPred, solTestY, title = "SVM Radial")
+gsvm
+```
+
+The subobject named `finalModel` contains the model created by the `ksvm` function:
+
+```{r}
+svmRTuned$finalModel
+```
+
+Here, we see that the model used 621 training set data points as support vectors (66% of the total training set).
+
+`kernlab` has an implementation of the RVM model for regression in the function `rvm`. The sintax is very similar to the example shown for `ksvm`.
+
+# K-Nearest Neighbors
+
+The `knnreg` function in the `caret` package fits the KNN regression model; `train` tunes de model over K:
+
+```{r}
+# Remove a few sparse and unbalanced fingerprints first
+knnDescr <- solTrainXtrans[ , -nearZeroVar(solTrainXtrans)]
+set.seed(100)
+knnTune <- train(knnDescr, solTrainY,
+                 method = "knn",
+                 # Center and scaleing will occur for new predictions too
+                 preProcess = c("center", "scale"),
+                 tuneGrid = data.frame(.k = 1:20),
+                 trControl = trainControl(method = "cv"))
+```
+
+When predicting new samples using this object, the new samples are automatically centered and scaled using the values determined by the training set.
+
+```{r}
+knnTune
+```
+
+Graphically,
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/plotModel.R")
+plot.model(knnTune)
+```
+
+With my own functions to make nice graphs on models and predictions,
+
+```{r}
+knnPred <- predict(knnTune, solTestXtrans)
+gknn <- plot.pred(knnPred, solTestY, title = "4 - Nearest Neighboor")
+gknn
+```
+
+```{r}
+plot.pred(knnPred, solTestY, title = "Residuals for KNN", residuals = TRUE)
+```
+
+
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/plotModel.R")
+#plot.model(enetTune)
+plot.model(nnetTune)
+plot.model(nnetTune1)
+plot.model(marsTuned)
+plot.model(svmRTuned)
+plot.model(knnTune)
+```
+
+We can generate a graph for to see how each of our models performed against the test set.
+
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/predObsPlot.R")
+gnnet <- plot.pred(nnetPred, solTestY, title = 'Neural Network')
+gavnnet <- plot.pred(avgPred, solTestY, title = 'Average Neural Network')
+gmars <- plot.pred(marsPred, solTestY, title = 'MARS')
+gsvm <- plot.pred(svmRPred, solTestY, title = "SVM Radial")
+gknn <- plot.pred(knnPred, solTestY, title = "4 - Nearest Neighboor")
+```
+
+A nice way of taking a look at all of this at once would be,
+
+```{r}
+library(reshape2)
+values <- data.frame(id = c(1:length(solTestY)),
+                     nnet = nnetPred,
+                     avgNNet = avgPred, 
+                     mars = as.numeric(marsPred),
+                     svm = svmRPred,
+                     knn = knnPred)
+values <- melt(values, id = "id")
+values$obs <- solTestY
+ggplot(values, aes(x = value, y = obs)) + facet_wrap(~variable, scales = 'free_x') +
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(x = 'Predictions', y = "Observations") +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_blank(),#element_line(colour = "grey"),
+        axis.ticks.y = element_blank()
+        )
+```
+
+But this is a lot of code for each time we have to do something and might even be a bit difficult to see which one is the best model if we don't see R^2 or RMSE.
+
+To improve that situation I created a function that would allow us to show the relevant data in a nice way and compare.
+
+```{r}
+library(gridExtra)
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/plotGrid.R")
+plot.grid(gnnet, gavnnet, gmars, gsvm, gknn, residuals = TRUE)
+```
+
+We can do the same when ploting the residuals.
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/predObsPlot.R")
+rgnnet <- plot.pred(nnetPred, solTestY, title = 'Neural Network',residuals = TRUE)
+rgavnnet <- plot.pred(avgPred, solTestY, title = 'Average Neural Network',residuals = TRUE)
+rgmars <- plot.pred(marsPred, solTestY, title = 'MARS',residuals = TRUE)
+rgsvm <- plot.pred(svmRPred, solTestY, title = "SVM Radial",residuals = TRUE)
+rgknn <- plot.pred(knnPred, solTestY, title = "4 - Nearest Neighboor",residuals = TRUE)
+
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/plotGrid.R")
+plot.grid(rgnnet, rgavnnet, rgmars, rgsvm, rgknn, residuals = TRUE)
+```
+
+
+
+
+
+
+
+
+
+
+

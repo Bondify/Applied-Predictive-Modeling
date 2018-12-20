@@ -1,0 +1,171 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Exercises Chapter 3"
+author: "Santiago Toso"
+output: github_document
+---
+
+# Chapter 3: Data Pre-Processing
+
+## The [UC Irvine Machine Learning Repository](http://archive.ics.uci.edu/ml/index.html) contains a data set related to glass identification. The data consist of 214 glass samples labeled as one of seven class categories. There are nince predictors, including the refractive index and precentage of eight elements: Na, Mg, Al, Si, K, Ca, Ba, and Fe.
+
+The data can be accessed via:
+
+```{r echo=TRUE}
+glassIdentification <- read.table( "https://archive.ics.uci.edu/ml/machine-learning-databases/glass/glass.data",
+                           sep=",")
+names(glassIdentification) <- c('ID', 'RI', 'NA2O', 'MGO', 'AL2O3', 'SIO2', 'K2O', 'CAO', 'BAO', 'FE2O3', 'TYPE')
+glassIdentification <- glassIdentification[ , -1]
+str(glassIdentification)
+```
+
+a- Using visualizations, explore the predictor variables to understand their distributions as well as the relationships between predictors.
+
+Will start with the skewness and then see the histograms.
+
+```{r echo=FALSE}
+library(e1071)
+skewness <- apply(glassIdentification, 2, skewness)
+skewness
+```
+
+```{r echo=FALSE}
+library(reshape2)
+library(ggplot2)
+melted <- melt(glassIdentification)
+ggplot(melted, aes(value)) + facet_wrap(~variable, scales = 'free_x') +
+  #geom_area(stat = 'bin', binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)), fill = '#41b6c4') +
+  # If we wanted to see histograms or frequency curves instead of the area graph we could use the next lines
+  geom_histogram(binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)), fill = '#41b6c4') +
+  # geom_freqpoly(binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)), color = '#41b6c4') +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_blank()
+        )
+```
+
+They look pretty skewed. Maybe with the box-plot is easier to identify outliers.
+
+```{r echo=FALSE}
+# p <- ggplot(glassIdentification, aes(x=dose, y=len)) + 
+#   geom_boxplot()
+ggplot(stack(glassIdentification), aes(x = ind, y = values)) +
+  geom_boxplot() +
+  # geom_freqpoly(binwidth = function(x) 2 * IQR(x) / (length(x)^(1/3)), color = '#41b6c4') +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey")
+        )
+```
+
+We see a lot of points here that tell us we have some outliers.
+
+Maybe we can check their correlations too before doing anything else.
+
+```{r echo=FALSE}
+library(knitr)
+correlations <- cor(glassIdentification)
+kable(correlations)
+```
+
+```{r echo=FALSE}
+library(corrplot)
+corrplot(correlations, order = 'hclust', tl.cex = 0.7)
+```
+
+b- Do they appear to be any outliers in the data? Any predictors skewed?
+
+We see that all predictors are skewed:
+
+```{r echo=FALSE}
+kable(sort(skewness))
+```
+
+The one with the lowest skewness is Na2O with 0.44, which is still, pretty skewed.
+
+We also see many outliers as shown in the Box plot below.
+
+c- Are there any relevant transformations of one or more predictors that might improve the classification model?
+
+We can use the `preProcess` function to find the right transformations to use, scale the data, center it, and finally apply PCA.
+
+```{r echo=FALSE}
+library(caret)
+trans <- preProcess(glassIdentification,
+                    method = c('BoxCox', 'center', 'scale', 'pca'))
+trans
+```
+
+It transformed 6 out of 10 variables and centered and scaled all of them. After the PCA transformation 7 principal components are needed to get the 95% of the variance.
+
+## The soybean data can also be found at the UC Irvine Machine Learning Repository. Data were collected to predict disease in 683 soybeans. The 35 predictors are mostly categorical and include information on te environmental condictions (e.g., temperature, precipitation) and plant conditions (e.g. left spots, mold growth). The outcome laels consist of 19 distinct classes.
+
+The data can be loaded via:
+
+```{r echo=FALSE}
+soyBean <- read.table( "https://archive.ics.uci.edu/ml/machine-learning-databases/soybean/soybean-large.data",
+                           sep=",")
+names(soyBean) <- c('date','plantstand','precip','temp','hail','crophist','areadamaged','severity','seedtmt','germination','plantgrowth','leaves','leafspotshalo','leafspotsmarg','leafspotsize','leafshread','leafmalf','leafmild','stem','lodging','stemcankers','cankerlesion','fruitingbodies','external decay','mycelium','intdiscolor','sclerotia','fruitpods','fruit spots','seed','moldgrowth','seeddiscolor','seedsize','shriveling','roots', 'V36')
+
+str(soyBean)
+```
+
+### Ivestigate the frequency distributions for the categorical predictors. Are any of the distributions defenarete in the ways discussed earlier in this chapter?
+
+Almost all the variables are categorical. To explore them we could start with a contingency table for each of the variables.
+
+```{r echo=TRUE}
+mytable <- table(soyBean$date)
+kable(mytable)
+```
+
+In proportions that would be like this:
+
+```{r}
+kable(prop.table(mytable))
+```
+
+```{r}
+barpt <- ggplot(soyBean, aes(x = date)) +
+  geom_bar(fill = '#41b6c4') +
+  coord_flip() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_blank(),
+        axis.ticks.x = element_line(colour = "grey")
+        )
+barpt
+```
+
+The thing is that we have too many variables to do this for each of them. So, we are going to apply the methods for filtering recommended by the authors.
+First, will use the `summary` function to look for outliers.
+```{r}
+summary <- summary(soyBean)
+summary
+```
+
+We see that many variables have a lot of *?*. We'll handle them in the next section.
+
+The `nearZeroVar` will tell us what predictors have almost no variability.
+
+```{r}
+names(soyBean[nearZeroVar(soyBean)])
+```
+
+We find two variables with almost no variability. We could just remove them from our model.
+
+```{r}
+filtereddf <- soyBean[, -nearZeroVar(soyBean)]
+```
+
+### Roughly 18% of the data are missing. Are there particular predictors that are more likely to be missing? Is the pattern of missing data related to the classes?
+
+Let's see how much data is missing for each of the variables.

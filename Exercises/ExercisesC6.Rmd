@@ -1,0 +1,635 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Exercises Chapter 6"
+author: "Santiago Toso"
+output: github_document
+---
+
+# Chapter 6: Linear Regression and Its Cousins 
+
+## R for predicting fat content in food from Infrared spectroscopy technology instead of analytical chemistry
+
+a- Start `R` and use the following commands
+```{r}
+library(caret)
+library(tidyverse)
+data(tecator)
+#?tecator
+```
+
+The matrix `absorp` contains the 100 abosorbance values for the 215 samples, while matrix `endpoints` contains the percent of moisture, fat, and protein in columns 1-3, respectively.
+
+b- In this example the predictors are the measurements at the individual frequencies. Because the frequencies lie in a systematic order (850-1050nm), the preductirs have a high degree of correlation. Hence, the data lie in a smaller dimension than the total number of predictors (100). Use PCA to determine the effective dimension of these data. What is the effective dimension?
+
+```{r}
+# trans <- preProcess(absorp,
+#                     method = c("center", "scale", "pca"))
+# trans
+
+pcaObject <- prcomp(absorp,
+                center = TRUE,
+                scale. = TRUE)
+
+percentVariance <- (pcaObject$sdev^2) / sum(pcaObject$sdev^2) * 100
+
+dfPercentVariance<- as.data.frame(percentVariance)
+
+dfPercentVariance <- dfPercentVariance %>% 
+  mutate(comp = c(1:length(percentVariance)))
+
+ggplot(data = dfPercentVariance, aes(x = comp, y = percentVariance)) +
+  geom_point(color = '#41b6c4') + 
+  geom_line(color = '#41b6c4') +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "grey"),
+        axis.ticks = element_line(colour = "grey")
+        )
+```
+
+Since the set contains 100 absorbance values for each of the 215 samples, it makes sense to find that only one of the values could explain almost all the set's variation. Nonetheless, we could never keep only one variable to try to explain all the problem, it would give very bad results.
+
+c- Split the data into training and test set, pre-process the data, and build each variaty of models described in this chapter. For those models with tuning parameters, what are the optimal values of the tuning parameters?
+
+```{r}
+fat <- endpoints[,2]
+
+trainRows <- createDataPartition(fat,
+                                 p = .8,
+                                 list = FALSE)
+```
+
+The train and test set will be
+
+```{r}
+trainPredictors <- as.data.frame(absorp[trainRows,])
+trainTarget <- fat[trainRows]
+
+testPredictors <- as.data.frame(absorp[-trainRows,])
+testTarget <- fat[-trainRows]
+
+dftrain <- cbind(trainPredictors, trainTarget)
+```
+
+The sample is small, we don't have many samples in the data sets. We'll need to use resample techniques to get the most out of our data. Nonetheless we can start with a simple linear regression and see how it goes.
+
+### Simple Linear Regression
+
+```{r}
+lmFitAllPredictors <- lm(trainTarget ~ ., data = dftrain)
+summary(lmFitAllPredictors)
+```
+
+It seems to be overfitted. Let's take a look and see how it works with the test set.
+
+```{r}
+lmPred1 <- predict(lmFitAllPredictors, as.data.frame(testPredictors))
+```
+
+We can see how it went like this
+
+```{r}
+lmValues <- data.frame(obs = testTarget, pred = lmPred1)
+lmSummary <- defaultSummary(lmValues)
+summary <- data.frame(lm = lmSummary)
+summary
+```
+
+We see that the R^2 is still good but the RMSE seems pretty high. We can make a grap to take a deeper look.
+Let's make a graph that shows the predicted values against the actual values to evaluate how it went.
+
+```{r}
+ggplot(lmValues, aes(x = pred, y = obs)) +
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'LM') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+The model looks pretty good actually. The main issue seems to be that one sample that looks like an outlier. Nonetheless, since we have a small sample we can't be sure.
+
+### Robust Linear Model
+
+Our sample is very small, so we are going to use resample methods to improve our results. Also, we've seen that the PCA analysis could save us a lot of work.
+
+```{r warning=FALSE}
+library(MASS)
+ctrl <- trainControl(method = 'cv', number = 10)
+
+set.seed(100)
+rlmFit <- train(x = as.data.frame(trainPredictors),y = trainTarget, 
+                method = "rlm",
+                preProcess = c("center","scale"),
+                trControl = ctrl)
+
+rlmFit
+
+# ctrl <- trainControl(method = 'cv', number = 10)
+# 
+# set.seed(100)
+# lmFit1 <- train(x = solTrainXtrans, y = solTrainY,
+#                 method = 'lm',
+#                 trControl = ctrl)
+# lmFit1
+```
+
+We'll see if this model works better.
+
+```{r}
+rlmValues <- data.frame(pred = predict(rlmFit, as.data.frame(testPredictors)), obs = testTarget)
+rlmSummary <- defaultSummary(rlmValues)
+summary <- cbind.data.frame(summary, rlm = rlmSummary)
+summary
+```
+
+Looks like the previous model was a bit better. 
+
+Graphically, it looks similar though.
+
+```{r}
+ggplot(rlmValues, aes(x = pred, y = obs)) +
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'RLM') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+### Partial Least Squares
+
+```{r}
+set.seed(100)
+
+plsTune <- train(trainPredictors, trainTarget,
+                 method = 'pls',
+                 trControl = ctrl,
+                 tuneLength = 20,
+                 preProcess = c("center", "scale"))
+
+plsTune
+```
+
+Looks like 14 components is the best option for us. If we were to see it graphically
+
+```{r}
+ggplot(data = plsTune$results, aes(x = ncomp, y = RMSE)) +
+  geom_line(color = '#41b6c4') +
+  geom_point(color = '#41b6c4') +
+  labs(title = '# Components vs RMSE for PLS model', x = '# Components') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+
+ggplot(data = plsTune$results, aes(x = ncomp, y = Rsquared)) +
+  geom_line(color = '#41b6c4') +
+  geom_point(color = '#41b6c4') +
+  labs(title = '# Components vs Rsquared for PLS model', x = '# Components') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+
+Now we'll try it on the test set
+
+```{r}
+plsPredictions <- predict(plsTune, testPredictors)
+plsValues <- data.frame(pred = plsPredictions, obs = testTarget)
+plsSummary <- defaultSummary(plsValues)
+summary <- cbind.data.frame(summary, pls = plsSummary)
+summary
+```
+
+PLS looks much better than the other two models. Let's take a look at the graph.
+
+```{r}
+ggplot(plsValues, aes(x = pred, y = obs)) +
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'PLS') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+Looks like this model improves the estimations a lot. It doesn't estimate any negative values as the others models did and the RMSE is much lower.
+
+### Penalized models
+
+Lastly, we will consider an `elastic net` model with different tuning parameters to choose the best one.
+
+```{r}
+enetGrid <- expand.grid(.lambda = seq(0, 0.1, length = 5),
+                        .fraction = seq(.05, 1, length = 20))
+set.seed(100)
+enetTune <- train(trainPredictors, trainTarget,
+                  method = 'enet',
+                  tuneGrid = enetGrid,
+                  trControl = ctrl,
+                  preProcess = c("center", "scale"))
+
+enetTune
+#plot(enetTune)
+#?expand.grid
+```
+
+According to the model, the best tuning parameters are `fraction = 0.05 and lambda = 0`. This actually means that the **lasso** model has been the best.
+
+```{r}
+#enetTune$results
+ggplot(enetTune$results, aes(x = fraction, y = RMSE, group = lambda)) +
+  geom_line(aes(color = as.character(lambda))) +
+  geom_point(aes(color = as.character(lambda))) +
+  labs(title = 'Elastic net for different values of λ1', x = 'Fraction of full solution') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey"),
+      legend.position = c(0.75, 0.8),
+      legend.title = element_blank()
+      )
+```
+
+We can test it now with our test set
+
+```{r}
+enetPredictions <- predict(enetTune, testPredictors)
+enetValues <- data.frame(pred = enetPredictions, obs = testTarget)
+enetSummary <- defaultSummary(enetValues)
+summary <- cbind.data.frame(summary, enet = enetSummary)
+summary
+```
+
+Looks like **lasso** bits all the other models.
+
+Let's try to graphicate the lasso. Although we may have too many variables to get something out of the graph.
+
+```{r}
+library(elasticnet)
+standarizedbeta <- enetTune$finalModel$beta.pure/max(abs(enetTune$finalModel$beta.pure))
+lambda1 <- enetTune$finalModel$tuneValue$lambda
+fraction <- enetTune$finalModel$tuneValue$fraction
+
+enetModel1 <- enet(x = as.matrix(trainPredictors), y= trainTarget,
+                  lambda = lambda1, normalize = TRUE)
+
+enetPred1 <- predict(enetModel1, newx = as.matrix(testPredictors),
+                    s = fraction, mode = 'fraction',
+                    type = 'fit')
+
+enetCoef1 <- predict(enetModel1, newx = as.matrix(testPredictions),
+                    s = fraction, mode = 'fraction',
+                    type = 'coefficients')
+
+# finalmodel <- enetTune$finalModel
+# finalmodel
+beta <- enetTune$finalModel$beta.pure
+tmp <- as.data.frame(as.matrix(beta))
+tmp$coef <- row.names(tmp)
+tmp <- reshape::melt(tmp, id = "coef")
+tmp$norm <- enetModel1$L1norm # compute L1 norm
+
+
+# x11(width = 13/2.54, height = 9/2.54)
+g1 <- ggplot(tmp, aes(norm, value, color = variable)) + 
+  geom_line() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.position = "none")
+
+g1
+```
+
+
+```{r}
+tmp1 <- tmp %>% 
+  filter(norm < 1000)
+
+tmp2 <- tmp1 %>% 
+  group_by(variable) %>% 
+  summarize(sum = sum(value)) %>% 
+  filter(sum != 0)
+
+tmp1 <- tmp1 %>% 
+  filter(variable %in% tmp2$variable)
+
+g <- ggplot(tmp1, aes(norm, value, color = variable)) + 
+  geom_line() +
+  labs(title = "Lasso", x = "L1 norm", y = "Standarized coefficients") +
+  #scale_color_brewer(palette="Set3") +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.direction = "horizontal",
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+g
+```
+
+## Developing a model to predict permeability
+
+a- Start `R` and use these commands to load the data:
+
+```{r}
+library(AppliedPredictiveModeling)
+data("permeability")
+```
+
+The matrix `fingerprints` contains the 1107 binary molecular predictors for the 165 compounds, while `permeability` contains the permeability response.
+
+b- The fingerprint predictors indicate the presence or absence of substructures of a molecule and are often sparse meaining that relatively few of the molecules contain each substructure. Filter out the predictors that have low frequencies using the `nearZeroVar` function from the `caret` package. How many predictors are left for modeling?
+
+```{r}
+#?nearZeroVar
+nearZero <- nearZeroVar(fingerprints)
+fingerprintsFiltered <- fingerprints[ , -nearZero]
+paste("There are ", ncol(fingerprintsFiltered), " predictors left", sep = "")
+```
+
+c- Split the data into a training and a test set, pre-process the data, and tune a PLS model. How many latent variables are optimal and what is the corresponding resampled estimate of R^2
+
+We start creating the train and test set
+
+```{r}
+trainRows <- createDataPartition(permeability,
+                                 p = .8,
+                                 list = FALSE)
+
+trainPredictors <- fingerprintsFiltered[trainRows, ]
+trainPermeability <- permeability[trainRows]
+
+testPredictors <- fingerprintsFiltered[-trainRows, ]
+testPermeability <- permeability[-trainRows]
+```
+
+Now we can specify the cross-validation we want to make.
+
+```{r}
+ctrl <- trainControl(method = "cv", number = 10)
+```
+
+Let's tune the PLS model now
+
+```{r}
+set.seed(100)
+plsModel <- train(x = trainPredictors, y = trainPermeability,
+                  method = "pls",
+                  tuneLength = 20,
+                  trControl = ctrl,
+                  preProcess = c("center", "scale"))
+
+plsModel
+```
+
+Looks like 8 components  (latent variables) is the best option for PLS, but all of them seem pretty bad models.
+
+d- Predict the response for the test set. What is the test set estimate of R^2?
+
+Let's try it for the test set now.
+
+```{r}
+plsPredictions <- predict(plsModel, testPredictors)
+plsValues <- data.frame(pred = plsPredictions, obs = testPermeability)
+defaultSummary(plsValues)
+```
+
+e- Try building other models discussed in this chapter. Do any of them have better predictive performance?
+
+```{r warning=FALSE}
+set.seed(100)
+
+lmModel <- train(x = trainPredictors, y = trainPermeability,
+                  method = "lm",
+                  trControl = ctrl,
+                  preProcess = c("center", "scale"))
+lmModel
+```
+
+```{r}
+set.seed(100)
+enetGrid <- expand.grid(.lambda = c(0, 0.01, .1),
+                        .fraction = seq(.05, 1, length = 20))
+
+enetModel <- train(x = trainPredictors, y = trainPermeability,
+                  method = "enet",
+                  tuneGrid = enetGrid,
+                  trControl = ctrl,
+                  preProcess = c("center", "scale"))
+enetModel
+```
+
+f- None of the models reaches to a 60% R^2, I would not recommend any of these models to replace the laboratory experiment.
+
+## A chemical manufacturing process for a pharmaceutical product was discussed in Sect 1.4. It has biological raw material's predictors which cannot be changed and manufacturing preductors that could be changed if needed.
+
+a- Start `R` and use these commands to load the data:
+
+```{r}
+library(AppliedPredictiveModeling)
+data("ChemicalManufacturingProcess")
+```
+
+The matrix `preprocessPredictors` contains the 57 predictors (12 describing the input biological material and 45 describing the preocess predictors) for the 176 manufacturing runs. `yield` contains the percent yield for each run.
+
+b- A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values (See section 3.8)
+
+```{r}
+#?ChemicalManufacturingProcess
+yield <- ChemicalManufacturingProcess[ ,1]
+preprocessPredictors <- ChemicalManufacturingProcess[ ,-1]
+
+summary(preprocessPredictors)
+```
+
+We see some missing values there. Let's try to make an imputation.
+
+```{r}
+#?preProcess
+imputation <- preProcess(preprocessPredictors,
+                   method = c("center", "scale"),
+                   k = 5,
+                   knnSummary = mean)
+```
+
+b- Split the data into training and a test set, pre-process the data, and tune a model of your choice from this chapter. What is the optimal value of the performance metric?
+
+```{r}
+trainRows <- createDataPartition(yield, 
+                    p = .8,
+                    list = FALSE)
+
+trainPredictors <- preprocessPredictors[trainRows, ]
+trainYield <- yield[trainRows]
+
+testPredictors <- preprocessPredictors[-trainRows, ]
+testYield <- yield[-trainRows]
+
+ctrl <- trainControl(method = "cv", number = 10)
+
+enetGrid <- expand.grid(.lambda = seq(0, .1, length.out = 5),
+                        .fraction = seq(.05, 1, length = 20))
+
+enetModel <- train(x = trainPredictors, y = trainYield,
+                   method = "enet",
+                   tuneGrid = enetGrid,
+                   preProcess = c("center", "scale", "knnImpute"),
+                   trControl = ctrl
+                   )
+enetModel
+```
+
+```{r}
+#plot(enetModel)
+ggplot(enetModel$results, aes(x = fraction, y = RMSE, group = lambda)) +
+  geom_line(aes(color = as.character(lambda))) +
+  geom_point(aes(color = as.character(lambda))) +
+  labs(title = 'Elastic net for different values of λ1', x = 'Fraction of full solution') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey"),
+      legend.position = c(0.75, 0.8),
+      legend.title = element_blank()
+      )
+```
+
+d- Predict the response for the test set. What is the value of the performance metrix and how does it compare with the resampled performance metric of the training set.
+
+```{r}
+enetFit <- predict(enetModel, testPredictors)
+enetValues <- data.frame(pred = enetFit, obs = testYield)
+enetSummary <- defaultSummary(enetValues)
+enetSummary
+```
+
+```{r}
+ggplot(enetValues, aes(x = pred, y = obs)) +
+  geom_point(color = '#41b6c4') +
+  geom_abline() +
+  labs(title = 'Enet') +
+  theme(panel.grid = element_blank(),
+      panel.background = element_blank(),
+      axis.line.x = element_line(colour = "grey"),
+      axis.line.y = element_line(colour = "grey"),
+      axis.ticks.x = element_line(colour = "grey"),
+      axis.ticks.y = element_line(colour = "grey")
+      )
+```
+
+
+e- Which predictors are most important in the model you have trained? Do either the biological or process predictors dominate the list?
+
+```{r}
+plot(enetModel)
+```
+
+
+```{r}
+beta <- enetModel$finalModel$beta.pure
+tmp <- as.data.frame(as.matrix(beta))
+tmp$coef <- row.names(tmp)
+tmp <- reshape::melt(tmp, id = "coef")
+tmp$norm <- enetModel$finalModel$L1norm # compute L1 norm
+
+
+# x11(width = 13/2.54, height = 9/2.54)
+g1 <- ggplot(tmp, aes(norm, value, color = variable)) + 
+  geom_line() +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.position = "none")
+
+g1
+```
+
+Let's take a deeper look to see what are the variables with the highest influence in the outcome.
+
+```{r}
+tmp1 <- tmp %>% 
+  filter(norm < 20)
+
+tmp2 <- tmp1 %>% 
+  group_by(variable) %>% 
+  summarize(sum = sum(value)) %>% 
+  filter(sum != 0)
+
+tmp1 <- tmp1 %>% 
+  filter(variable %in% tmp2$variable)
+
+g <- ggplot(tmp1, aes(norm, value, color = variable)) + 
+  geom_line() +
+  labs(title = "Lasso", x = "L1 norm", y = "Standarized coefficients") +
+  #scale_color_brewer(palette="Set3") +
+  theme(panel.grid = element_blank(),
+        panel.background = element_blank(),
+        axis.line.x = element_line(colour = "grey"),
+        axis.line.y = element_line(colour = "grey"),
+        axis.ticks.x = element_line(colour = "grey"),
+        axis.ticks.y = element_line(colour = "grey"),
+        legend.direction = "horizontal",
+        legend.position = "bottom",
+        legend.title = element_blank())
+
+g
+```
+
+All of them are manufacturing variables that we could manipulate to get the outcome we want in yield.
+
+I saw that I've been using the lasso plot a lot and it takes a lot of code to get the plot I wanted. To solve that problem I created my own function. It takes the object that you get as a result from the `train` function of the `caret` package when you use `method = enet`. 
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/enetPlot.R")
+
+enetPlot(enetModel = enetModel, L1norm = 20, maxlegend = 10)
+```
+
+```{r}
+source("/Users/santiagotoso/GoogleDrive/Master/R/Functions/enetPlotCompare.R")
+enetPlotCompare(enetModel)
+```
+
+
+
+
+
+
+

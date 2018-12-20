@@ -1,0 +1,43 @@
+---
+title: "Applied Predictive Modeling"
+subtitle: "Exercises Chapter 4"
+author: "Santiago Toso"
+output: github_document
+---
+
+# Chapter 4: Over-Fitting and Model Tuning
+
+## Brodnjak-Vonina et al. (2005) develop a methodology for food laboratories to determine the type of oil from a sample. In their procedure, they used a gas chromatograph to measure seven different fatty acids in an oil. These measurements would then be used to predict the type of oil in a food samples. To create their model, they used 96 samples of seven types of oils.
+
+The types are pumpkim (A), sunflower (B), peanut (C), olive (D), soybean (E), rapeseed (F), and corn (G). In R
+
+```{r}
+data(oil)
+table(oilType)
+```
+
+a- Use `sample` to crete a completely random sample of 60 oils. How do the frequencies of the random sample match the original samples? Repeat this procedures several times to understand the variation in the sampling process.
+
+```{r}
+proptable <- round(table(oilType)/length(oilType), 2)
+sampled <- sample(oilType, size = 60)
+proptablesample <- round(table(sampled)/length(sampled), 2)
+difference <- proptable - proptablesample
+difference
+```
+
+b- Use the `caret` package function `createDataPartition` to create a stratified random sample. How does this compare to the completely random samples?
+
+```{r}
+rowsStratified <- createDataPartition(oilType, 
+                                  p = 0.75,
+                                  list = FALSE)
+stratified <- oilType[rowsStratified]
+propStratified <- round(table(stratified)/length(stratified),2)
+difference2 <- proptable - propStratified
+difference2
+```
+
+c- Which such a small sample size (n=96) what are the options for determining performance of the model? Shouldl a test set be used?
+
+No, it is better to use re-sampling when we have small sample sizes so we can train the model with all its samples.
